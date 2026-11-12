@@ -249,10 +249,34 @@ CREATE TABLE capa_actions (                                                     
 -- ---------- Numbering & audit -------------------------------------------------
 CREATE TABLE doc_series (org_id INT, doc_type TEXT, yr INT, last_no INT NOT NULL DEFAULT 0, PRIMARY KEY (org_id, doc_type, yr));
 CREATE OR REPLACE FUNCTION next_no(p_org INT, p_type TEXT) RETURNS TEXT AS $$
-DECLARE n INT; y INT := EXTRACT(YEAR FROM CURRENT_DATE);
+DECLARE
+  n INT;
+  y INT := EXTRACT(YEAR FROM CURRENT_DATE);
+  max_existing INT := 0;
 BEGIN
-  INSERT INTO doc_series VALUES (p_org, p_type, y, 1)
-  ON CONFLICT (org_id, doc_type, yr) DO UPDATE SET last_no = doc_series.last_no + 1 RETURNING last_no INTO n;
+  IF p_type IN ('IPQC', 'FQC', 'IQC') THEN
+    SELECT COALESCE(MAX(SUBSTRING(insp_no FROM '-([0-9]+)$')::int), 0)
+      INTO max_existing
+      FROM inspections
+     WHERE org_id = p_org AND stage::text = p_type AND insp_no LIKE (p_type || '-' || y || '-%');
+  ELSIF p_type = 'NCR' THEN
+    SELECT COALESCE(MAX(SUBSTRING(ncr_no FROM '-([0-9]+)$')::int), 0)
+      INTO max_existing
+      FROM ncrs
+     WHERE org_id = p_org AND ncr_no LIKE ('NCR-' || y || '-%');
+  ELSIF p_type = 'CAPA' THEN
+    SELECT COALESCE(MAX(SUBSTRING(capa_no FROM '-([0-9]+)$')::int), 0)
+      INTO max_existing
+      FROM capas
+     WHERE org_id = p_org AND capa_no LIKE ('CAPA-' || y || '-%');
+  END IF;
+
+  INSERT INTO doc_series (org_id, doc_type, yr, last_no)
+  VALUES (p_org, p_type, y, GREATEST(max_existing, 0) + 1)
+  ON CONFLICT (org_id, doc_type, yr)
+  DO UPDATE SET last_no = GREATEST(doc_series.last_no, max_existing) + 1
+  RETURNING last_no INTO n;
+
   RETURN p_type || '-' || y || '-' || lpad(n::TEXT, 4, '0');
 END $$ LANGUAGE plpgsql;
 
