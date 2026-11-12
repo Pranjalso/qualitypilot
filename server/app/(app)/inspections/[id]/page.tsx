@@ -24,9 +24,47 @@ export default function Inspection({ params }: { params: { id: string } }) {
   const payload = () => d.characteristics.flatMap((c: any) => Array.from({ length: c.n }, (_, i) => { const g = grid[`${c.id}:${i + 1}`] ?? {};
     return { characteristic_id: c.id, sample_no: i + 1, value: c.type === 'VARIABLE' && g.value !== undefined && g.value !== '' ? Number(g.value) : null, ok: c.type === 'ATTRIBUTE' ? g.ok ?? null : null, instrument_id: inst[c.id] ? Number(inst[c.id]) : null }; }));
   const save = async () => { setErr(''); setOk(''); setBusy(true); try { const r = await apiCall(`/api/inspections/${d.id}/results`, 'PUT', { results: payload() }); setOk(`Saved ${r.saved} readings`); await reload(); } catch (x: any) { setErr(x.message); } setBusy(false); };
-  const submit = async () => { setErr(''); setOk(''); setBusy(true);
-    try { await apiCall(`/api/inspections/${d.id}/results`, 'PUT', { results: payload() }); const r = await apiCall(`/api/inspections/${d.id}/submit`, 'POST', {});
-      setOk(r.result === 'PASS' ? 'PASS — lot accepted' : `FAIL — ${r.defective_units} defective unit(s)${r.critical_fail ? ', critical characteristic' : ''}. Lot on hold; NCR raised.`); await reload(); } catch (x: any) { setErr(x.message); } setBusy(false); };
+  const getMissingSamples = () => {
+    const missing: { name: string; filled: number; required: number; id: number }[] = [];
+    for (const c of d.characteristics) {
+      let count = 0;
+      for (let i = 1; i <= c.n; i++) {
+        const g = grid[`${c.id}:${i}`];
+        if (g && (c.type === 'ATTRIBUTE' ? g.ok != null : g.value !== undefined && g.value !== '')) {
+          count++;
+        }
+      }
+      if (count < c.n) {
+        missing.push({ name: c.name, filled: count, required: c.n, id: c.id });
+      }
+    }
+    return missing;
+  };
+
+  const submit = async () => {
+    setErr(''); setOk('');
+    const missing = getMissingSamples();
+    if (missing.length > 0) {
+      const details = missing.map(m => `${m.name} (${m.filled}/${m.required})`).join(', ');
+      setErr(`Incomplete: Please record all required sample measurements before submitting (${details}).`);
+      // Scroll to the first missing characteristic card smoothly
+      const el = document.getElementById(`char-card-${missing[0].id}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await apiCall(`/api/inspections/${d.id}/results`, 'PUT', { results: payload() });
+      const r = await apiCall(`/api/inspections/${d.id}/submit`, 'POST', {});
+      setOk(r.result === 'PASS' ? 'PASS — lot accepted' : `FAIL — ${r.defective_units} defective unit(s)${r.critical_fail ? ', critical characteristic' : ''}. Lot on hold; NCR raised.`);
+      await reload();
+    } catch (x: any) {
+      setErr(x.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const ngCount = d.characteristics.reduce((s: number, c: any) => s + Array.from({ length: c.n }, (_, i) => grid[`${c.id}:${i + 1}`]).filter(g => g && (c.type === 'ATTRIBUTE' ? g.ok === false : g.value !== undefined && g.value !== '' && !inSpec(c, Number(g.value)))).length, 0);
   const filled = d.characteristics.reduce((s: number, c: any) => s + Array.from({ length: c.n }, (_, i) => grid[`${c.id}:${i + 1}`]).filter(g => g && (c.type === 'ATTRIBUTE' ? g.ok != null : g.value !== undefined && g.value !== '')).length, 0);
   const total = d.characteristics.reduce((s: number, c: any) => s + c.n, 0);
@@ -34,7 +72,7 @@ export default function Inspection({ params }: { params: { id: string } }) {
   return <>
     <div className="topbar no-print"><h1>{d.insp_no} <StatusBadge s={d.status} /> {d.result && <StatusBadge s={d.result} />}</h1><div className="row">
       <Link className="btn" href="/lots">← Queue</Link><button className="btn" onClick={() => print()}>Print report</button>
-      {draft && <><button className="btn" disabled={busy || !dirty} onClick={save}>Save</button><button className="btn primary" disabled={busy} onClick={submit}>Submit ({filled}/{total})</button></>}
+      {draft && <><button className="btn" disabled={busy || !dirty} onClick={save}>Save</button><button className="btn primary" disabled={busy || filled < total} title={filled < total ? `Complete all samples (${filled}/${total}) to submit` : 'Submit inspection'} onClick={submit}>Submit ({filled}/{total})</button></>}
       {d.status === 'SUBMITTED' && me && ['ADMIN', 'QA_MANAGER'].includes(me.role) && <button className="btn green" onClick={async () => { setErr(''); try { await apiCall(`/api/inspections/${d.id}/approve`, 'POST'); setOk('Approved'); reload(); } catch (x: any) { setErr(x.message); } }}>QA approve</button>}
       {d.ncr_id && <Link className="btn red" href={`/ncrs/${d.ncr_id}`}>{d.ncr_no}</Link>}</div></div>
     <div className="no-print"><Msg err={err} ok={ok} /></div>
@@ -46,9 +84,12 @@ export default function Inspection({ params }: { params: { id: string } }) {
         <div><div className="muted">Source</div><b>{d.supplier ?? d.line ?? 'Production'}</b><div className="muted">{d.supplier ? `GRN ${d.grn_no ?? '—'} · inv ${d.supplier_invoice ?? '—'}` : `Shift ${d.shift ?? '—'}`}</div></div>
         <div><div className="muted">Sampling</div><b>{d.sample_size} pcs · Ac {d.accept_number}</b><div className="muted">{d.is_reinspection ? 'Re-inspection after rework' : 'First inspection'}</div></div></div></div>
     {draft && <p className="muted no-print">Readings turn red when outside specification. {ngCount > 0 && <b className="out">{ngCount} reading(s) out of spec.</b>} Gauges past calibration are not offered.</p>}
-    {d.characteristics.map((c: any) => { const sm = d.summary.find((x: any) => x.characteristic_id === c.id); return <div className="card" key={c.id} style={{ padding: 12 }}>
+    {d.characteristics.map((c: any) => { const sm = d.summary.find((x: any) => x.characteristic_id === c.id);
+      const filledForChar = Array.from({ length: c.n }, (_, i) => grid[`${c.id}:${i + 1}`]).filter(g => g && (c.type === 'ATTRIBUTE' ? g.ok != null : g.value !== undefined && g.value !== '')).length;
+      const isCharIncomplete = draft && filledForChar < c.n;
+      return <div className={`card ${isCharIncomplete && filled > 0 ? 'card-incomplete-highlight' : ''}`} id={`char-card-${c.id}`} key={c.id} style={{ padding: 12, border: isCharIncomplete && filled > 0 ? '1px solid #F59E0B' : undefined }}>
       <div className="row" style={{ marginBottom: 8, flexWrap: 'wrap' }}><b>{c.seq / 10}. {c.name}</b><span className={`badge s-${c.severity}`}>{c.severity}</span><span className="mono">{spec(c)} {c.unit ?? ''}</span>
-        {c.nominal != null && <span className="muted">nominal {Number(c.nominal)}</span>}<span className="muted">· {c.n} samples{c.method ? ` · ${c.method}` : ''}</span><div className="spacer" />
+        {c.nominal != null && <span className="muted">nominal {Number(c.nominal)}</span>}<span className={`muted ${isCharIncomplete ? 'text-amber' : ''}`} style={isCharIncomplete ? { color: '#D97706', fontWeight: 600 } : undefined}>· {filledForChar}/{c.n} samples recorded{c.method ? ` · ${c.method}` : ''}</span><div className="spacer" />
         {c.type === 'VARIABLE' && (draft ? <select value={inst[c.id] ?? ''} onChange={e => { setInst({ ...inst, [c.id]: e.target.value }); setDirty(true); }} style={{ width: 230 }}>
           <option value="">Gauge ({c.instrument_type ?? 'any'})…</option>{instFor(c).map((i: any) => <option key={i.id} value={i.id} disabled={['OVERDUE', 'OUT_OF_SERVICE'].includes(i.cal_status)}>{i.code} · {i.name}{i.cal_status !== 'OK' ? ` (${i.cal_status.replace('_', ' ')})` : ''}</option>)}</select>
           : <span className="muted">Gauge {d.results.find((r: any) => r.characteristic_id === c.id)?.instrument ?? '—'}</span>)}
