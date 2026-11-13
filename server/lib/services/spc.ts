@@ -30,8 +30,11 @@ export async function spc(org: number, characteristicId: number, from?: string, 
       WHERE p.org_id=$1 AND p.product_id=(SELECT product_id FROM inspection_plans WHERE id=$2) AND p.stage=$3 AND c.name=$4
         AND i.status <> 'DRAFT' AND ($5::date IS NULL OR i.submitted_at::date >= $5) AND ($6::date IS NULL OR i.submitted_at::date <= $6)
       GROUP BY i.id, l.lot_no ORDER BY i.submitted_at LIMIT 125`, [org, ch.plan_id, ch.stage, ch.name, from ?? null, to ?? null]);
-  const groups = rows.map(r => ({ ...r, vals: r.vals.map(Number) }));
-  if (groups.length < 2) return { characteristic: ch, points: [], message: 'At least 2 inspections are needed for a control chart' };
+  const plannedN = Number(ch.samples || 1);
+  const groups = rows
+    .map(r => ({ ...r, vals: (r.vals as any[]).map(Number).filter((v: number) => v != null && isFinite(v) && v > 0) }))
+    .filter(g => g.vals.length >= Math.min(plannedN, 2));
+  if (groups.length < 2) return { characteristic: ch, points: [], message: 'At least 2 complete inspections are needed for a control chart' };
   const n = Math.min(...groups.map(g => g.vals.length));
   const all = groups.flatMap(g => g.vals);
   const lsl = ch.lsl == null ? null : Number(ch.lsl), usl = ch.usl == null ? null : Number(ch.usl);

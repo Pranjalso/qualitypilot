@@ -4,19 +4,51 @@ const fmt = (v: number, d = 3) => (Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed
 /** Control chart: points with centre line, UCL/LCL and optional spec limits; signalled points in red */
 export function ControlChart({ points, center, ucl, lcl, lsl, usl, title, unit, digits = 3 }: { points: { label: string; v: number | null; flag?: boolean }[];
   center: number; ucl: number; lcl: number; lsl?: number | null; usl?: number | null; title: string; unit?: string; digits?: number }) {
-  const W = 900, H = 260, P = 58, R = 90;
+  const W = 900, H = 260, P = 58, R = 110;
   const pts = points.filter(p => p.v != null) as { label: string; v: number; flag?: boolean }[];
   const vals = [...pts.map(p => p.v), ucl, lcl, ...(lsl != null ? [lsl] : []), ...(usl != null ? [usl] : [])];
   const lo = Math.min(...vals), hi = Math.max(...vals), pad = (hi - lo) * 0.08 || 1;
   const y = (v: number) => 16 + (1 - (v - (lo - pad)) / (hi - lo + 2 * pad)) * (H - 50);
   const x = (i: number) => P + (i / Math.max(1, points.length - 1)) * (W - P - R);
-  const line = (v: number, color: string, label: string, dash = '') => <g><line x1={P} x2={W - R} y1={y(v)} y2={y(v)} stroke={color} strokeDasharray={dash} strokeWidth="1.3" />
-    <text x={W - R + 6} y={y(v) + 4} fontSize="11" fill={color}>{label} {fmt(v, digits)}</text></g>;
+
+  // Compute reference lines and adjust label positions to avoid overlapping text
+  const rawLines = [
+    ...(usl != null ? [{ v: usl, color: '#dc2626', label: 'USL', dash: '2 3' }] : []),
+    { v: ucl, color: '#d97706', label: 'UCL', dash: '6 4' },
+    { v: center, color: '#12b39a', label: 'CL', dash: '' },
+    { v: lcl, color: '#d97706', label: 'LCL', dash: '6 4' },
+    ...(lsl != null ? [{ v: lsl, color: '#dc2626', label: 'LSL', dash: '2 3' }] : []),
+  ];
+
+  // Anti-collision label positioning
+  const positioned = [...rawLines]
+    .map(item => ({ ...item, lineY: y(item.v), labelY: y(item.v) + 4 }))
+    .sort((a, b) => a.labelY - b.labelY);
+
+  const minGap = 13;
+  for (let i = 1; i < positioned.length; i++) {
+    if (positioned[i].labelY < positioned[i - 1].labelY + minGap) {
+      positioned[i].labelY = positioned[i - 1].labelY + minGap;
+    }
+  }
+  if (positioned.length && positioned[positioned.length - 1].labelY > H - 20) {
+    positioned[positioned.length - 1].labelY = H - 20;
+    for (let i = positioned.length - 2; i >= 0; i--) {
+      if (positioned[i].labelY > positioned[i + 1].labelY - minGap) {
+        positioned[i].labelY = positioned[i + 1].labelY - minGap;
+      }
+    }
+  }
+
   const path = points.map((p, i) => (p.v == null ? '' : `${i && points[i - 1]?.v != null ? 'L' : 'M'}${x(i)},${y(p.v)}`)).join('');
   return <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label={title}>
     <text x={P} y={11} fontSize="12" fontWeight="700" fill="#0B1F4B">{title}{unit ? ` (${unit})` : ''}</text>
-    {usl != null && line(usl, '#dc2626', 'USL', '2 3')}{lsl != null && line(lsl, '#dc2626', 'LSL', '2 3')}
-    {line(ucl, '#d97706', 'UCL', '6 4')}{line(lcl, '#d97706', 'LCL', '6 4')}{line(center, '#12b39a', 'CL')}
+    {positioned.map(item => (
+      <g key={item.label}>
+        <line x1={P} x2={W - R} y1={item.lineY} y2={item.lineY} stroke={item.color} strokeDasharray={item.dash} strokeWidth="1.3" />
+        <text x={W - R + 6} y={item.labelY} fontSize="11" fill={item.color} fontWeight="500">{item.label} {fmt(item.v, digits)}</text>
+      </g>
+    ))}
     <path d={path} fill="none" stroke="#3B4FE0" strokeWidth="1.6" />
     {points.map((p, i) => p.v != null && <circle key={i} cx={x(i)} cy={y(p.v)} r={p.flag ? 4 : 2.6} fill={p.flag ? '#dc2626' : '#3B4FE0'}><title>{`${p.label}: ${fmt(p.v, digits + 1)}`}</title></circle>)}
     {[0, Math.floor(points.length / 2), points.length - 1].filter((v, i, a) => a.indexOf(v) === i && points[v]).map(i =>
