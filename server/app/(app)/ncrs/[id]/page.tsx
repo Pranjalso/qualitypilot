@@ -11,11 +11,12 @@ export default function Ncr({ params }: { params: { id: string } }) {
   const [err, setErr] = useState(''); const [ok, setOk] = useState(''); const [dm, setDm] = useState<any>(null); const [cm, setCm] = useState<any>(null);
   if (!n) return <p>Loading…</p>;
   const qa = me && ['ADMIN', 'QA_MANAGER'].includes(me.role); const open = ['OPEN', 'UNDER_REVIEW'].includes(n.status);
+  const canDispose = qa && open && n.raised_by !== me?.user?.id;
   const act = async (path: string, body?: any, msg = 'Done') => { setErr(''); setOk(''); try { await apiCall(`/api/ncrs/${n.id}/${path}`, 'POST', body ?? {}); setOk(msg); reload(); return true; } catch (x: any) { setErr(x.message); return false; } };
   return <>
     <div className="topbar"><h1>{n.ncr_no} <StatusBadge s={n.status} /> <StatusBadge s={n.severity} /></h1><div className="row"><Link className="btn" href="/ncrs">← NCRs</Link>
       {qa && n.status === 'OPEN' && <button className="btn" onClick={() => act('review', {}, 'Moved to MRB review')}>Start MRB review</button>}
-      {qa && open && <button className="btn primary" onClick={() => setDm({ disposition: n.supplier_id ? 'RETURN_TO_SUPPLIER' : 'REWORK', disposition_qty: Number(n.qty_affected) || Number(n.lot_qty) || 0, cost_of_poor_quality: 0 })}>Disposition</button>}
+      {canDispose && <button className="btn primary" onClick={() => setDm({ disposition: n.supplier_id ? 'RETURN_TO_SUPPLIER' : 'REWORK', disposition_qty: Number(n.qty_affected) || Number(n.lot_qty) || 0, cost_of_poor_quality: 0 })}>Disposition</button>}
       {qa && !n.capa_id && n.status !== 'CANCELLED' && <button className="btn" onClick={() => setCm({ type: 'CORRECTIVE', title: n.title, problem: n.description, target_date: new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10), ncr_ids: [n.id] })}>Open CAPA</button>}
       {qa && n.status === 'DISPOSITIONED' && <button className="btn green" onClick={() => act('close', {}, 'NCR closed')}>Close NCR</button>}
       {qa && open && <button className="btn ghost-red" onClick={() => act('cancel', {}, 'Cancelled')}>Cancel</button>}</div></div>
@@ -35,7 +36,7 @@ export default function Ncr({ params }: { params: { id: string } }) {
         <tr><td>Disposition</td><td><b>{n.disposition.replace(/_/g, ' ')}</b></td></tr><tr><td>Quantity</td><td>{Number(n.disposition_qty)}</td></tr>
         <tr><td>Justification</td><td>{n.disposition_note}</td></tr><tr><td>Cost of poor quality</td><td>{inr(n.cost_of_poor_quality)}</td></tr>
         <tr><td>Decided by</td><td>{n.disposed_by_name} · {fmtDate(n.disposed_at)}</td></tr>{n.closed_by_name && <tr><td>Closed by</td><td>{n.closed_by_name} · {fmtDate(n.closed_at)}</td></tr>}</tbody></table>
-        : <p className="muted">Awaiting disposition. The lot stays on hold until the MRB decides. The person who raised the NCR cannot disposition it; CRITICAL issues cannot be used as-is; CRITICAL or repeat issues need a CAPA before closing.</p>}
+        : <p className="muted">Awaiting disposition. The lot stays on hold until the MRB decides. {n.raised_by === me?.user?.id ? <b>Segregation of duties: You raised this NCR, so another QA / MRB member must provide the disposition. </b> : ''}The person who raised the NCR cannot disposition it; CRITICAL issues cannot be used as-is; CRITICAL or repeat issues need a CAPA before closing.</p>}
         {n.defects.length > 0 && <><h4>Defects from inspection</h4><table><tbody>{n.defects.map((d: any, i: number) => <tr key={i}><td className="mono">{d.code}</td><td>{d.name}</td><td className="num">{d.quantity}</td><td>{d.photo_url && <img src={d.photo_url} alt="" className="thumb" />}</td></tr>)}</tbody></table></>}</div></div>
     {dm && <Modal title="MRB disposition" onClose={() => setDm(null)}><Msg err={err} /><div className="form">
       <Field label="Decision" wide><select value={dm.disposition} onChange={e => setDm({ ...dm, disposition: e.target.value })}>{Object.entries(DISP).map(([k, v]) => <option key={k} value={k} disabled={(k === 'RETURN_TO_SUPPLIER' && !n.supplier_id) || (k === 'USE_AS_IS' && n.severity === 'CRITICAL')}>{v}</option>)}</select></Field>

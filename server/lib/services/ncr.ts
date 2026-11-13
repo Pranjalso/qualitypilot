@@ -50,7 +50,7 @@ export async function disposition(s: Session, id: number, d: any) {
     const { rows: [n] } = await c.query(`SELECT * FROM ncrs WHERE id=$1 AND org_id=$2 FOR UPDATE`, [id, s.orgId]);
     if (!n) throw new HttpError(404, 'NCR not found');
     if (!['OPEN', 'UNDER_REVIEW'].includes(n.status)) throw new HttpError(422, `NCR is already ${n.status}`);
-    if (n.raised_by === s.uid && s.role !== 'ADMIN') throw new HttpError(403, 'Disposition must be given by someone other than the person who raised the NCR');
+    if (n.raised_by === s.uid) throw new HttpError(403, 'Segregation of duties: Disposition must be given by someone other than the person who raised the NCR');
     if (d.disposition === 'RETURN_TO_SUPPLIER' && !n.supplier_id) throw new HttpError(422, 'Return to supplier applies only to supplier material');
     if (d.disposition === 'USE_AS_IS' && n.severity === 'CRITICAL') throw new HttpError(422, 'A CRITICAL non-conformance cannot be used as-is');
     if (n.lot_id) {
